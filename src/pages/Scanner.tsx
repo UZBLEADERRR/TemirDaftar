@@ -56,6 +56,17 @@ export const Scanner = () => {
                 html5QrCode?.resume();
               } finally { setLoading(false); }
 
+            } else if (decodedText.startsWith('P2P:')) {
+              const parts = decodedText.split(':');
+              const uId = parts[1];
+              const amount = parts[2];
+              const data = await apiCall(`/api/users/${uId}`);
+              if (data && mounted) {
+                setScannedUser(data);
+                // Auto-fill amount if present
+                navigate(`/profile?sendTo=${uId}&amount=${amount}`);
+              } else { toast.error('Foydalanuvchi topilmadi'); html5QrCode?.resume(); }
+
             } else if (decodedText.startsWith('USER:')) {
               const uId = decodedText.replace('USER:', '');
               const data = await apiCall(`/api/users/${uId}`);

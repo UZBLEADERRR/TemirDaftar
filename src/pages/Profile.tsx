@@ -5,7 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Settings as SettingsIcon, CreditCard, LogOut, ShieldCheck, ScanLine, Sun, Moon } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Settings as SettingsIcon, CreditCard, LogOut, ShieldCheck, ScanLine, Sun, Moon, Copy, Check } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import QRCode from 'react-qr-code';
 import { toast } from 'sonner';
@@ -33,6 +34,9 @@ export const Profile = () => {
   const [cardType, setCardType] = useState('uzcard');
   const [editName, setEditName] = useState('');
   const [savingName, setSavingName] = useState(false);
+  const [showReceive, setShowReceive] = useState(false);
+  const [receiveAmount, setReceiveAmount] = useState('');
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -54,14 +58,25 @@ export const Profile = () => {
   useEffect(() => {
     const sp = new URLSearchParams(location.search);
     const sendTo = sp.get('sendTo');
+    const amount = sp.get('amount');
     if (sendTo) {
       setActiveTab('wallet');
       setShowP2p(true);
       setShowTopup(false);
       setP2pUserId(sendTo);
+      if (amount) setP2pAmount(amount);
       navigate('/profile', { replace: true });
     }
   }, [location.search]);
+
+  const handleCopyId = () => {
+    if (!user?.id) return;
+    navigator.clipboard.writeText(user.id);
+    setCopied(true);
+    hapticSuccess();
+    toast.success(t('id_copied'));
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleAddCard = async () => {
     if (!newCard || !user) return;
@@ -164,7 +179,46 @@ export const Profile = () => {
             <span className="text-3xl font-bold block mb-6">{walletBalance.toLocaleString()} <span className="text-lg font-normal">UZS</span></span>
             <div className="flex gap-3 relative z-10">
               <button onClick={() => { setShowTopup(!showTopup); setShowP2p(false); hapticFeedback(); }} className="bg-white/20 hover:bg-white/30 backdrop-blur-sm px-4 py-2 rounded-xl text-sm font-bold flex-1 text-center transition-colors">{t('topup')}</button>
-              <button onClick={() => { setShowP2p(!showP2p); setShowTopup(false); hapticFeedback(); }} className="bg-white text-indigo-600 hover:bg-zinc-100 px-4 py-2 rounded-xl text-sm font-bold flex-1 text-center transition-colors shadow-sm">{t('send')}</button>
+              <button onClick={() => { setShowP2p(!showP2p); setShowTopup(false); hapticFeedback(); }} className="bg-white/20 hover:bg-white/30 backdrop-blur-sm px-4 py-2 rounded-xl text-sm font-bold flex-1 text-center transition-colors">{t('send')}</button>
+              
+              <Dialog open={showReceive} onOpenChange={setShowReceive}>
+                <DialogTrigger asChild>
+                  <button onClick={() => hapticFeedback()} className="bg-white text-indigo-600 hover:bg-zinc-100 px-4 py-2 rounded-xl text-sm font-bold flex-1 text-center transition-colors shadow-sm">{t('receive')}</button>
+                </DialogTrigger>
+                <DialogContent className="w-[90%] rounded-2xl dark:bg-zinc-950 dark:border-zinc-800">
+                  <DialogHeader>
+                    <DialogTitle>{t('receive')}</DialogTitle>
+                  </DialogHeader>
+                  <div className="flex flex-col items-center gap-6 py-4">
+                    <div className="bg-white p-4 rounded-2xl shadow-md border border-zinc-100">
+                      <QRCode value={receiveAmount ? `P2P:${user?.id}:${receiveAmount}` : `USER:${user?.id}`} size={200} />
+                    </div>
+                    <div className="w-full space-y-4">
+                      <div className="space-y-2">
+                        <Label className="text-xs text-zinc-500 uppercase tracking-wider">{t('enter_amount_optional')}</Label>
+                        <Input 
+                          type="text" 
+                          inputMode="numeric" 
+                          value={receiveAmount} 
+                          onChange={e => setReceiveAmount(e.target.value.replace(/[^0-9]/g, '').replace(/^0+/, ''))}
+                          placeholder="Summa..."
+                          className="text-center font-bold text-lg h-12 rounded-xl"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[10px] text-zinc-500 text-center uppercase tracking-widest">{t('receiver_id')}</p>
+                        <div className="flex items-center gap-2 bg-zinc-100 dark:bg-zinc-900 p-3 rounded-xl border dark:border-zinc-800">
+                          <code className="text-xs font-mono flex-1 truncate">{user?.id}</code>
+                          <button onClick={handleCopyId} className="text-indigo-600 p-1">
+                            {copied ? <Check size={18} /> : <Copy size={18} />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-xs text-zinc-500 text-center italic">{t('receive_desc')}</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
           </div>
 

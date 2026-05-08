@@ -89,7 +89,12 @@ const resources = {
       "someone_gave_you": "Kimdir sizga qarz berdi",
       "they_want_from_you": "Sizdan qarz so'ramoqda",
       "debt_requested": "Qarz so'raldi",
-      "camera_error": "Kamera xatoligi. Ruxsat bering."
+      "camera_error": "Kamera xatoligi. Ruxsat bering.",
+      "receive": "Qabul qilish",
+      "copy_id": "ID nusxalash",
+      "id_copied": "ID nusxalandi!",
+      "enter_amount_optional": "Miqdor kiriting (ixtiyoriy)",
+      "receive_desc": "Sizga pul yuborishlari uchun bu kodni ko'rsating"
     }
   },
   ru: {
@@ -178,7 +183,12 @@ const resources = {
       "someone_gave_you": "Кто-то дал вам в долг",
       "they_want_from_you": "Хотят от вас в долг",
       "debt_requested": "Запрос долга",
-      "camera_error": "Ошибка камеры. Дайте разрешение."
+      "camera_error": "Ошибка камеры. Дайте разрешение.",
+      "receive": "Получить",
+      "copy_id": "Копировать ID",
+      "id_copied": "ID скопирован!",
+      "enter_amount_optional": "Введите сумму (необязательно)",
+      "receive_desc": "Покажите этот код для получения денег"
     }
   },
   en: {
@@ -267,7 +277,12 @@ const resources = {
       "someone_gave_you": "Someone gave you",
       "they_want_from_you": "They want from you",
       "debt_requested": "Debt Requested",
-      "camera_error": "Camera error. Please allow access."
+      "camera_error": "Camera error. Please allow access.",
+      "receive": "Receive",
+      "copy_id": "Copy ID",
+      "id_copied": "ID copied!",
+      "enter_amount_optional": "Enter amount (optional)",
+      "receive_desc": "Show this code to receive money"
     }
   }
 };
