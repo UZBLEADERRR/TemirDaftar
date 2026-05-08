@@ -70,10 +70,21 @@ async function start() {
       const qrToken = randomUUID();
 
       if (type === 'took') {
-        if ((user.wallet_balance || 0) < 1000)
-          return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas' });
-        await supabase.from('users').update({ wallet_balance: user.wallet_balance - 1000 }).eq('id', user.id);
-        await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'fee', amount: 1000, status: 'completed' });
+        // First 3 times free
+        const { count } = await supabase
+          .from('debts')
+          .select('id', { count: 'exact', head: true })
+          .eq('creator_id', user.id)
+          .eq('giver_id', null);  // debts where user is receiver/creator
+        const takenCount = count || 0;
+
+        if (takenCount >= 3) {
+          if ((user.wallet_balance || 0) < 1000)
+            return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas (3 ta bepul foydalanish tugadi)' });
+          await supabase.from('users').update({ wallet_balance: user.wallet_balance - 1000 }).eq('id', user.id);
+          await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'fee', amount: 1000, status: 'completed' });
+        }
+        // else: free (first 3 times)
       }
 
       const { data: debt, error } = await supabase.from('debts').insert({

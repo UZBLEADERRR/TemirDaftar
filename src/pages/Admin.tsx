@@ -31,6 +31,13 @@ export const Admin = () => {
   const [deductAmount, setDeductAmount] = useState('');
   const [deductReason, setDeductReason] = useState('');
 
+  // Add money form
+  const [addAmount, setAddAmount] = useState('');
+  const [addReason, setAddReason] = useState('');
+
+  // Trust score
+  const [trustScore, setTrustScore] = useState<any>(null);
+
   // Distance form
   const [distUser1, setDistUser1] = useState('');
   const [distUser2, setDistUser2] = useState('');
@@ -72,6 +79,11 @@ export const Admin = () => {
       setSelectedUser(data.user);
       setUserLocations(data.locations || []);
       setUserDebts({ asReceiver: data.debtsAsReceiver || [], asGiver: data.debtsAsGiver || [] });
+      // Fetch trust score
+      try {
+        const trust = await apiCall(`/api/users/${userId}/trust`);
+        setTrustScore(trust);
+      } catch { setTrustScore(null); }
     } catch {}
   };
 
@@ -110,6 +122,21 @@ export const Admin = () => {
       toast.success('Pul yechildi');
       setDeductAmount('');
       setDeductReason('');
+      fetchUserDetails(userId);
+    } catch { toast.error('Xatolik'); }
+  };
+
+  const handleAddMoney = async (userId: string) => {
+    if (!addAmount || Number(addAmount) <= 0) return;
+    try {
+      await apiCall(`/api/admin/add-money/${userId}`, {
+        method: 'POST',
+        body: JSON.stringify({ amount: Number(addAmount), reason: addReason }),
+      });
+      hapticSuccess();
+      toast.success('Pul qo\'shildi');
+      setAddAmount('');
+      setAddReason('');
       fetchUserDetails(userId);
     } catch { toast.error('Xatolik'); }
   };
@@ -220,10 +247,31 @@ export const Admin = () => {
           {/* Deduct money */}
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
             <h4 className="font-bold text-sm text-red-700 dark:text-red-400 mb-2">💸 Pul yechish</h4>
-            <Input type="number" value={deductAmount} onChange={e => setDeductAmount(e.target.value)} placeholder="Miqdor" className="mb-2" />
+            <Input type="text" inputMode="numeric" value={deductAmount} onChange={e => setDeductAmount(e.target.value.replace(/[^0-9]/g, '').replace(/^0+/, '') || '')} placeholder="Miqdor" className="mb-2" />
             <Input value={deductReason} onChange={e => setDeductReason(e.target.value)} placeholder="Sabab" className="mb-2" />
             <Button variant="destructive" className="w-full" onClick={() => handleDeduct(selectedUser.id)} disabled={!deductAmount}>Yechish</Button>
           </div>
+
+          {/* Add money */}
+          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4">
+            <h4 className="font-bold text-sm text-green-700 dark:text-green-400 mb-2">💰 Pul qo'shish</h4>
+            <Input type="text" inputMode="numeric" value={addAmount} onChange={e => setAddAmount(e.target.value.replace(/[^0-9]/g, '').replace(/^0+/, '') || '')} placeholder="Miqdor" className="mb-2" />
+            <Input value={addReason} onChange={e => setAddReason(e.target.value)} placeholder="Sabab" className="mb-2" />
+            <Button className="w-full bg-green-600 hover:bg-green-700" onClick={() => handleAddMoney(selectedUser.id)} disabled={!addAmount}>Qo'shish</Button>
+          </div>
+
+          {/* Trust Score */}
+          {trustScore && (
+            <div className="bg-white dark:bg-zinc-900 border rounded-xl p-4">
+              <h4 className="font-bold text-sm mb-3">⭐ Ishonch reytingi</h4>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <div><span className="text-xl font-bold">{trustScore.totalDebts}</span><p className="text-[10px] text-zinc-500">Jami</p></div>
+                <div><span className="text-xl font-bold text-green-600">{trustScore.paidOnTime}</span><p className="text-[10px] text-zinc-500">To'langan</p></div>
+                <div><span className="text-xl font-bold text-red-500">{trustScore.overdue}</span><p className="text-[10px] text-zinc-500">Kechikkan</p></div>
+                <div><span className="text-xl font-bold text-indigo-600">{trustScore.givenToOthers}</span><p className="text-[10px] text-zinc-500">Bergan</p></div>
+              </div>
+            </div>
+          )}
 
           {/* Locations */}
           {userLocations.length > 0 && (

@@ -16,6 +16,7 @@ const PaymentSection = ({ debt, t }: { debt: any; t: any }) => {
   const [cards, setCards] = useState<string[]>([]);
   const [receiptUrl, setReceiptUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [paymentToken, setPaymentToken] = useState('');
 
   useEffect(() => {
     // Get giver's cards
@@ -43,6 +44,20 @@ const PaymentSection = ({ debt, t }: { debt: any; t: any }) => {
     }
   };
 
+  // Generate payment QR for giver to scan
+  const handlePaymentQR = async () => {
+    setLoading(true);
+    try {
+      const res = await apiCall(`/api/debts/${debt.id}/payment-qr`, { method: 'POST' });
+      if (res.payment_token) {
+        setPaymentToken(res.payment_token);
+        hapticSuccess();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'QR yaratishda xatolik');
+    } finally { setLoading(false); }
+  };
+
   return (
     <div className="mt-4 border-t border-zinc-200 dark:border-zinc-800 pt-4 flex flex-col gap-3">
       <h3 className="font-bold">{t('pay')}</h3>
@@ -68,6 +83,22 @@ const PaymentSection = ({ debt, t }: { debt: any; t: any }) => {
       <Button onClick={handlePay} disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700">
         {loading ? '...' : t('send_payment')}
       </Button>
+
+      <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3 mt-1">
+        <p className="text-xs text-zinc-500 mb-2 text-center">Yoki to'lov QR kodni qarz beruvchiga ko'rsating:</p>
+        {paymentToken ? (
+          <div className="flex flex-col items-center">
+            <div className="bg-white p-3 rounded-xl shadow-sm border border-zinc-200">
+              <QRCode value={`PAY:${paymentToken}`} size={140} />
+            </div>
+            <p className="text-[10px] text-zinc-400 mt-2">Faqat 1 marta ishlatiladi</p>
+          </div>
+        ) : (
+          <Button variant="outline" onClick={handlePaymentQR} disabled={loading} className="w-full">
+            📱 To'lov QR yaratish
+          </Button>
+        )}
+      </div>
     </div>
   );
 };
@@ -200,7 +231,7 @@ const DebtItem: React.FC<{ debt: any; isGiven: boolean; t: any }> = ({ debt, isG
             <div className="mt-6 flex flex-col items-center">
               <span className="text-xs text-zinc-500 mb-2 font-medium text-center">{t('show_this_qr')}</span>
               <div className="bg-white p-4 rounded-xl shadow-sm border border-zinc-200">
-                <QRCode value={`DEBT:${debt.id}`} size={150} />
+                <QRCode value={debt.qr_token ? `QRZ:${debt.qr_token}` : `DEBT:${debt.id}`} size={150} />
               </div>
             </div>
           )}

@@ -22,10 +22,10 @@ export const Profile = () => {
   const [walletBalance, setWalletBalance] = useState(0);
   const [showTopup, setShowTopup] = useState(false);
   const [topupUrl, setTopupUrl] = useState('');
-  const [topupAmount, setTopupAmount] = useState(10000);
+  const [topupAmount, setTopupAmount] = useState('');
   const [showP2p, setShowP2p] = useState(false);
   const [p2pUserId, setP2pUserId] = useState('');
-  const [p2pAmount, setP2pAmount] = useState<number | ''>('');
+  const [p2pAmount, setP2pAmount] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'wallet' | 'score'>('wallet');
   const [scoreDetails, setScoreDetails] = useState({ given: 0, returned: 0, late: 0 });
@@ -97,14 +97,15 @@ export const Profile = () => {
   };
 
   const handleTopup = async () => {
-    if (topupAmount < 10000) { toast.error(t('min_topup')); return; }
+    if (Number(topupAmount) < 10000) { toast.error(t('min_topup')); return; }
     if (!topupUrl) { toast.error(t('receipt_required')); return; }
     try {
-      await apiCall('/api/wallet/topup', { method: 'POST', body: JSON.stringify({ amount: topupAmount, receiptUrl: topupUrl }) });
+      await apiCall('/api/wallet/topup', { method: 'POST', body: JSON.stringify({ amount: Number(topupAmount), receiptUrl: topupUrl }) });
       hapticSuccess();
       toast.success(t('topup_sent'));
       setShowTopup(false);
       setTopupUrl('');
+      setTopupAmount('');
     } catch { toast.error(t('topup_error')); }
   };
 
@@ -171,7 +172,7 @@ export const Profile = () => {
             <div className="p-4 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl flex flex-col gap-3">
               <h3 className="font-bold border-b pb-2">{t('topup_wallet')}</h3>
               <p className="text-xs text-zinc-500">{t('topup_desc')}</p>
-              <Input type="number" value={topupAmount} onChange={e => setTopupAmount(Number(e.target.value))} placeholder={t('amount_min')} className="bg-white dark:bg-zinc-950" />
+              <Input type="text" inputMode="numeric" value={topupAmount} onChange={e => setTopupAmount(e.target.value.replace(/[^0-9]/g, '').replace(/^0+/, ''))} placeholder={t('amount_min')} className="bg-white dark:bg-zinc-950" />
               <Input type="file" accept="image/*" onChange={e => {
                 const file = e.target.files?.[0];
                 if (file) {
@@ -199,7 +200,7 @@ export const Profile = () => {
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs">{t('amount')}</Label>
-                <Input type="number" value={p2pAmount} onChange={e => setP2pAmount(Number(e.target.value))} placeholder="0 UZS" className="bg-white dark:bg-zinc-950" />
+                <Input type="text" inputMode="numeric" value={p2pAmount} onChange={e => setP2pAmount(e.target.value.replace(/[^0-9]/g, '').replace(/^0+/, ''))} placeholder="Miqdor" className="bg-white dark:bg-zinc-950" />
               </div>
               <Button onClick={handleP2p} className="w-full mt-2 bg-indigo-600 hover:bg-indigo-700" disabled={!p2pUserId || !p2pAmount}>{t('send_funds')}</Button>
             </div>

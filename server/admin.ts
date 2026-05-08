@@ -104,6 +104,27 @@ router.post('/deduct/:userId', async (req, res) => {
   res.json({ success: true, newBalance });
 });
 
+// Add money to user
+router.post('/add-money/:userId', async (req, res) => {
+  const { amount, reason } = req.body;
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+
+  const { data: user } = await supabase.from('users').select('wallet_balance, telegram_chat_id, name').eq('id', req.params.userId).single();
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const newBalance = (user.wallet_balance || 0) + amount;
+  await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', req.params.userId);
+
+  await supabase.from('wallet_transactions').insert({
+    user_id: req.params.userId, type: 'topup', amount, status: 'approved',
+  });
+
+  if (user.telegram_chat_id) {
+    await sendTelegramMessage(user.telegram_chat_id, `✅ Hamyoningizga ${amount.toLocaleString()} UZS qo'shildi!\nSabab: ${reason || 'Admin tomonidan'}`);
+  }
+  res.json({ success: true, newBalance });
+});
+
 // Account recovery
 router.post('/recover-account', async (req, res) => {
   const { oldTelegramId, newTelegramId } = req.body;

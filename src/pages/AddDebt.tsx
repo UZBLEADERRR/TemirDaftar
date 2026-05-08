@@ -165,7 +165,7 @@ export const AddDebt = () => {
         <div className="flex flex-col gap-2">
           <Label className="dark:text-zinc-300">{t('amount')} / {t('currency')}</Label>
           <div className="flex gap-2">
-            <Input name="amount" type="number" required placeholder="50000" className="h-12 text-lg rounded-xl dark:bg-zinc-900 flex-1" />
+            <Input name="amount" type="text" inputMode="numeric" pattern="[0-9]*" required placeholder="50000" className="h-12 text-lg rounded-xl dark:bg-zinc-900 flex-1" onInput={e => { const v = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, '').replace(/^0+/, ''); (e.target as HTMLInputElement).value = v; }} />
             <select name="currency" className="h-12 px-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 dark:text-zinc-100 font-bold w-24 outline-none">
               <option value="UZS">UZS</option><option value="USD">USD</option><option value="RUB">RUB</option><option value="KRW">KRW</option><option value="EUR">EUR</option>
             </select>
