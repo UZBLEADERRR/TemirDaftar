@@ -5,13 +5,15 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Settings as SettingsIcon, CreditCard, LogOut, ShieldCheck, ScanLine } from 'lucide-react';
+import { Settings as SettingsIcon, CreditCard, LogOut, ShieldCheck, ScanLine, Sun, Moon } from 'lucide-react';
+import { useTheme } from '@/components/ThemeProvider';
 import QRCode from 'react-qr-code';
 import { toast } from 'sonner';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 export const Profile = () => {
   const { user, refreshUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const { t, i18n } = useTranslation();
@@ -266,6 +268,15 @@ export const Profile = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <Label className="text-xs uppercase tracking-wider text-zinc-500 font-bold">Mavzu</Label>
+                <button onClick={toggleTheme}
+                  className="flex items-center justify-between bg-zinc-50 dark:bg-zinc-900 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800">
+                  <span className="text-sm font-medium">{theme === 'dark' ? '🌙 Tungi rejim' : '☀️ Kunduzgi rejim'}</span>
+                  {theme === 'dark' ? <Moon size={18} /> : <Sun size={18} />}
+                </button>
               </div>
             </div>
           </div>

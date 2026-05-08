@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/components/AuthContext';
 import { apiCall, hapticFeedback, hapticSuccess } from '@/src/lib/telegram';
 import { CardContent } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import QRCode from 'react-qr-code';
 import { useTranslation } from 'react-i18next';
@@ -267,22 +266,24 @@ export const Debts = () => {
   const [taken, setTaken] = useState<any[]>([]);
   const [filterCurrency, setFilterCurrency] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'given' | 'taken'>('given');
 
   useEffect(() => {
     if (!user) return;
-    const fetch = async () => {
+    const load = async () => {
       try {
         const data = await apiCall('/api/debts');
         setGiven(data.given || []);
         setTaken(data.taken || []);
       } catch {} finally { setLoading(false); }
     };
-    fetch();
+    load();
   }, [user]);
 
   const currencies = ['ALL', 'UZS', 'USD', 'RUB', 'KRW', 'EUR'];
   const fGiven = filterCurrency === 'ALL' ? given : given.filter(d => (d.currency || 'UZS') === filterCurrency);
   const fTaken = filterCurrency === 'ALL' ? taken : taken.filter(d => (d.currency || 'UZS') === filterCurrency);
+  const activeList = activeTab === 'given' ? fGiven : fTaken;
 
   return (
     <div className="p-6">
@@ -304,22 +305,28 @@ export const Debts = () => {
         ))}
       </div>
 
-      <Tabs defaultValue="given" className="w-full">
-        <TabsList className="w-full mb-6 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl">
-          <TabsTrigger value="given" className="flex-1 rounded-lg">{t('to_receive')}</TabsTrigger>
-          <TabsTrigger value="taken" className="flex-1 rounded-lg">{t('to_pay')}</TabsTrigger>
-        </TabsList>
-        <TabsContent value="given">
-          {loading ? <div className="text-center py-10 text-zinc-400">...</div> :
-            fGiven.length === 0 ? <div className="text-center text-zinc-400 py-10">{t('no_records_found')}</div> :
-            fGiven.map(d => <DebtItem key={d.id} debt={d} isGiven={true} t={t} />)}
-        </TabsContent>
-        <TabsContent value="taken">
-          {loading ? <div className="text-center py-10 text-zinc-400">...</div> :
-            fTaken.length === 0 ? <div className="text-center text-zinc-400 py-10">{t('no_records_found')}</div> :
-            fTaken.map(d => <DebtItem key={d.id} debt={d} isGiven={false} t={t} />)}
-        </TabsContent>
-      </Tabs>
+      <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-xl p-1 mb-6">
+        <button onClick={() => { setActiveTab('given'); hapticFeedback(); }}
+          className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 'given' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'}`}>
+          {t('to_receive')}
+        </button>
+        <button onClick={() => { setActiveTab('taken'); hapticFeedback(); }}
+          className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 'taken' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'}`}>
+          {t('to_pay')}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-10"><div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div></div>
+      ) : activeList.length === 0 ? (
+        <div className="text-center text-zinc-400 py-16 flex flex-col items-center gap-2">
+          <span className="text-4xl">📭</span>
+          <span className="text-sm">{t('no_records_found')}</span>
+        </div>
+      ) : (
+        activeList.map(d => <DebtItem key={d.id} debt={d} isGiven={activeTab === 'given'} t={t} />)
+      )}
     </div>
   );
 };
+

@@ -3,27 +3,31 @@ import { getTelegramWebApp } from '@/src/lib/telegram';
 
 type Theme = 'light' | 'dark';
 
-const ThemeContext = createContext<{ theme: Theme }>({ theme: 'dark' });
+const ThemeContext = createContext<{ theme: Theme; toggleTheme: () => void }>({
+  theme: 'dark',
+  toggleTheme: () => {},
+});
 
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
-  const [theme, setTheme] = useState<Theme>('dark');
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem('qarz-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    const tg = getTelegramWebApp();
+    if (tg) return tg.colorScheme || 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
 
   useEffect(() => {
-    const tg = getTelegramWebApp();
-    if (tg) {
-      const colorScheme = tg.colorScheme || 'dark';
-      setTheme(colorScheme);
-      document.documentElement.classList.toggle('dark', colorScheme === 'dark');
-    } else {
-      // Fallback: check system preference
-      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      setTheme(isDark ? 'dark' : 'light');
-      document.documentElement.classList.toggle('dark', isDark);
-    }
-  }, []);
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    localStorage.setItem('qarz-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
 
   return (
-    <ThemeContext.Provider value={{ theme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );
