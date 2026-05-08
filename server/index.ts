@@ -57,45 +57,136 @@ async function start() {
     } catch { res.status(500).json({ error: 'Server error' }); }
   });
 
-  // Create debt
+  // Create debt — returns qr_token for QR code
   app.post('/api/debts', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
     try {
       const { data: user } = await supabase
-        .from('users').select('id, wallet_balance')
+        .from('users').select('id, wallet_balance, name')
         .eq('telegram_id', req.telegramUser!.id).single();
       if (!user) return res.status(404).json({ error: 'User not found' });
 
       const { amount, currency, dueDate, receiverName, receiverPhone, note, type, receiverId } = req.body;
+      const { randomUUID } = await import('crypto');
+      const qrToken = randomUUID();
 
-      // If taking debt, charge 1000 UZS fee
       if (type === 'took') {
-        if ((user.wallet_balance || 0) < 1000) {
+        if ((user.wallet_balance || 0) < 1000)
           return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas' });
-        }
-        await supabase.from('users').update({ wallet_balance: (user.wallet_balance || 0) - 1000 }).eq('id', user.id);
-        await supabase.from('wallet_transactions').insert({
-          user_id: user.id, type: 'fee', amount: 1000, status: 'completed',
-        });
+        await supabase.from('users').update({ wallet_balance: user.wallet_balance - 1000 }).eq('id', user.id);
+        await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'fee', amount: 1000, status: 'completed' });
       }
 
       const { data: debt, error } = await supabase.from('debts').insert({
         amount, currency: currency || 'UZS', due_date: dueDate,
         giver_id: type === 'took' ? null : user.id,
         receiver_id: type === 'took' ? user.id : (receiverId || null),
-        receiver_name: type === 'took' ? '' : receiverName,
-        receiver_phone: type === 'took' ? '' : receiverPhone,
+        receiver_name: type === 'took' ? '' : (receiverName || ''),
+        receiver_phone: type === 'took' ? '' : (receiverPhone || ''),
         status: receiverId ? 'active' : 'pending',
         note: note || '', creator_id: user.id,
+        qr_token: qrToken,
       }).select().single();
 
       if (error) throw error;
-      res.json(debt);
+      res.json({ ...debt, qr_token: qrToken });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to create debt' });
     }
   });
 
+  // Scan QR — get debt info by token
+  app.get('/api/debts/scan/:token', telegramAuth as any, async (req, res) => {
+    try {
+      const { data: debt } = await supabase
+        .from('debts')
+        .select('id, amount, currency, due_date, note, status, giver_id, receiver_id, receiver_name, giver:giver_id(id,name,score), receiver:receiver_id(id,name,score)')
+        .eq('qr_token', req.params.token).single();
+      if (!debt) return res.status(404).json({ error: 'QR kod topilmadi yoki allaqachon ishlatilgan' });
+      if (debt.status !== 'pending') return res.status(400).json({ error: 'Bu QR kod allaqachon ishlatilgan' });
+      res.json(debt);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Confirm debt via QR token (one-time)
+  app.post('/api/debts/scan/:token/confirm', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: scanUser } = await supabase
+        .from('users').select('id, wallet_balance, name')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!scanUser) return res.status(404).json({ error: 'User not found' });
+
+      const { data: debt } = await supabase.from('debts').select('*').eq('qr_token', req.params.token).single();
+      if (!debt) return res.status(404).json({ error: 'QR kod topilmadi' });
+      if (debt.status !== 'pending') return res.status(400).json({ error: 'Bu QR kod allaqachon ishlatilgan' });
+
+      let updateData: any = { status: 'active', qr_token: null, updated_at: new Date().toISOString() };
+      let notifyId: string | null = null;
+
+      if (debt.giver_id && !debt.receiver_id) {
+        if ((scanUser.wallet_balance || 0) < 1000)
+          return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas (xizmat to\'lovi)' });
+        await supabase.from('users').update({ wallet_balance: scanUser.wallet_balance - 1000 }).eq('id', scanUser.id);
+        await supabase.from('wallet_transactions').insert({ user_id: scanUser.id, type: 'fee', amount: 1000, status: 'completed' });
+        updateData.receiver_id = scanUser.id;
+        updateData.receiver_name = scanUser.name;
+        notifyId = debt.giver_id;
+      } else if (debt.receiver_id && !debt.giver_id) {
+        updateData.giver_id = scanUser.id;
+        notifyId = debt.receiver_id;
+      } else {
+        return res.status(400).json({ error: 'Noto\'g\'ri qarz holati' });
+      }
+
+      await supabase.from('debts').update(updateData).eq('id', debt.id);
+
+      if (notifyId) {
+        const { data: other } = await supabase.from('users').select('telegram_chat_id').eq('id', notifyId).single();
+        if (other?.telegram_chat_id) {
+          const { sendTelegramMessage } = await import('./bot.js');
+          await sendTelegramMessage(other.telegram_chat_id,
+            `✅ Qarz tasdiqlandi!\n💰 ${debt.amount.toLocaleString()} ${debt.currency}\n👤 ${scanUser.name} tomonidan tasdiqlandi`);
+        }
+      }
+      res.json({ success: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Generate payment QR
+  app.post('/api/debts/:id/payment-qr', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase.from('users').select('id').eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const { data: debt } = await supabase.from('debts').select('*').eq('id', req.params.id).single();
+      if (!debt || debt.receiver_id !== user.id) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+      const { randomUUID } = await import('crypto');
+      const paymentToken = randomUUID();
+      await supabase.from('debts').update({ payment_qr_token: paymentToken }).eq('id', debt.id);
+      res.json({ payment_token: paymentToken });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Confirm payment via payment QR token
+  app.post('/api/debts/payment/:token/confirm', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase.from('users').select('id, name').eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const { data: debt } = await supabase.from('debts')
+        .select('*, receiver:receiver_id(name, telegram_chat_id)')
+        .eq('payment_qr_token', req.params.token).single();
+      if (!debt) return res.status(404).json({ error: 'To\'lov QR topilmadi' });
+      if (debt.giver_id !== user.id) return res.status(403).json({ error: 'Faqat qarz bergan kishi tasdiqlashi mumkin' });
+      await supabase.from('debts').update({ status: 'paid', payment_qr_token: null, updated_at: new Date().toISOString() }).eq('id', debt.id);
+      const receiverChat = (debt.receiver as any)?.telegram_chat_id;
+      if (receiverChat) {
+        const { sendTelegramMessage } = await import('./bot.js');
+        await sendTelegramMessage(receiverChat, `✅ To'lovingiz tasdiqlandi!\n💰 ${debt.amount.toLocaleString()} ${debt.currency}`);
+      }
+      res.json({ success: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
   // Update debt status
+
   app.patch('/api/debts/:id', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
     try {
       const { data: user } = await supabase
@@ -205,31 +296,6 @@ async function start() {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const { cards } = req.body;
     await supabase.from('users').update({ cards }).eq('id', user.id);
-    res.json({ success: true });
-  });
-
-  // Confirm debt via QR scan
-  app.post('/api/debts/:id/confirm', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
-    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('telegram_id', req.telegramUser!.id).single();
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const { data: debt } = await supabase.from('debts').select('*').eq('id', req.params.id).single();
-    if (!debt) return res.status(404).json({ error: 'Debt not found' });
-
-    const { role } = req.body; // 'receiver' or 'giver'
-
-    if (role === 'receiver') {
-      // Charge 1000 UZS fee
-      if ((user.wallet_balance || 0) < 1000) {
-        return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas' });
-      }
-      await supabase.from('users').update({ wallet_balance: (user.wallet_balance || 0) - 1000 }).eq('id', user.id);
-      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'fee', amount: 1000, status: 'completed' });
-      await supabase.from('debts').update({ receiver_id: user.id, status: 'active', updated_at: new Date().toISOString() }).eq('id', debt.id);
-    } else {
-      await supabase.from('debts').update({ giver_id: user.id, status: 'active', updated_at: new Date().toISOString() }).eq('id', debt.id);
-    }
-
     res.json({ success: true });
   });
 
