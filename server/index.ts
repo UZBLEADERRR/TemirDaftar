@@ -235,7 +235,8 @@ async function start() {
 
   // ===== Static / Vite =====
   if (isProd) {
-    const distPath = path.resolve(__dirname, '../dist');
+    // Server runs from dist/server/index.js, Vite output is in dist/
+    const distPath = path.resolve(__dirname, '..');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
   } else {
