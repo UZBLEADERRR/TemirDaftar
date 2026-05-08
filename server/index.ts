@@ -140,11 +140,26 @@ async function start() {
       await supabase.from('debts').update(updateData).eq('id', debt.id);
 
       if (notifyId) {
-        const { data: other } = await supabase.from('users').select('telegram_chat_id').eq('id', notifyId).single();
-        if (other?.telegram_chat_id) {
-          const { sendTelegramMessage } = await import('./bot.js');
-          await sendTelegramMessage(other.telegram_chat_id,
-            `✅ Qarz tasdiqlandi!\n💰 ${debt.amount.toLocaleString()} ${debt.currency}\n👤 ${scanUser.name} tomonidan tasdiqlandi`);
+        const { data: other } = await supabase.from('users').select('id, telegram_chat_id, name').eq('id', notifyId).single();
+        if (other) {
+          const { createNotification } = await import('./bot.js');
+          const isNewReceiver = !!updateData.receiver_id;
+          await createNotification(
+            other.id,
+            other.telegram_chat_id,
+            isNewReceiver ? '✅ Qarz tasdiqlandi' : '✅ Qarz qabul qilindi',
+            `${scanUser.name} tomonidan ${debt.amount.toLocaleString()} ${debt.currency} qarz tasdiqlandi`
+          );
+          // Also notify the scanner themselves
+          const { data: scannerRow } = await supabase.from('users').select('id, telegram_chat_id').eq('telegram_id', req.telegramUser!.id).single();
+          if (scannerRow) {
+            await createNotification(
+              scannerRow.id,
+              scannerRow.telegram_chat_id,
+              isNewReceiver ? '📥 Qarz olindi' : '📤 Qarz berildi',
+              `${debt.amount.toLocaleString()} ${debt.currency} qarz ro'yxatga qo'shildi`
+            );
+          }
         }
       }
       res.json({ success: true });
@@ -176,10 +191,27 @@ async function start() {
       if (!debt) return res.status(404).json({ error: 'To\'lov QR topilmadi' });
       if (debt.giver_id !== user.id) return res.status(403).json({ error: 'Faqat qarz bergan kishi tasdiqlashi mumkin' });
       await supabase.from('debts').update({ status: 'paid', payment_qr_token: null, updated_at: new Date().toISOString() }).eq('id', debt.id);
-      const receiverChat = (debt.receiver as any)?.telegram_chat_id;
-      if (receiverChat) {
-        const { sendTelegramMessage } = await import('./bot.js');
-        await sendTelegramMessage(receiverChat, `✅ To'lovingiz tasdiqlandi!\n💰 ${debt.amount.toLocaleString()} ${debt.currency}`);
+      // Notify receiver
+      if (debt.receiver_id) {
+        const { data: receiver } = await supabase.from('users').select('id, telegram_chat_id, name').eq('id', debt.receiver_id).single();
+        if (receiver) {
+          const { createNotification } = await import('./bot.js');
+          await createNotification(
+            receiver.id, receiver.telegram_chat_id,
+            '✅ To\'lovingiz tasdiqlandi!',
+            `${debt.amount.toLocaleString()} ${debt.currency} to'lovingiz qarz beruvchi tomonidan tasdiqlandi`
+          );
+        }
+      }
+      // Notify giver
+      const { data: giverRow } = await supabase.from('users').select('id, telegram_chat_id').eq('id', debt.giver_id).single();
+      if (giverRow) {
+        const { createNotification } = await import('./bot.js');
+        await createNotification(
+          giverRow.id, giverRow.telegram_chat_id,
+          '💰 To\'lov qabul qilindi',
+          `${debt.amount.toLocaleString()} ${debt.currency} to'lovi tasdiqlandi`
+        );
       }
       res.json({ success: true });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -296,6 +328,16 @@ async function start() {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const { cards } = req.body;
     await supabase.from('users').update({ cards }).eq('id', user.id);
+    res.json({ success: true });
+  });
+
+  // Update user name
+  app.patch('/api/me/name', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    const { data: user } = await supabase.from('users').select('id').eq('telegram_id', req.telegramUser!.id).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Ism bo\'sh bo\'lmasligi kerak' });
+    await supabase.from('users').update({ name: name.trim() }).eq('id', user.id);
     res.json({ success: true });
   });
 

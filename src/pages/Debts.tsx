@@ -281,8 +281,11 @@ export const Debts = () => {
   }, [user]);
 
   const currencies = ['ALL', 'UZS', 'USD', 'RUB', 'KRW', 'EUR'];
-  const fGiven = filterCurrency === 'ALL' ? given : given.filter(d => (d.currency || 'UZS') === filterCurrency);
-  const fTaken = filterCurrency === 'ALL' ? taken : taken.filter(d => (d.currency || 'UZS') === filterCurrency);
+  const hiddenStatuses = ['paid', 'forgiven', 'rejected'];
+  const activeGiven = given.filter(d => !hiddenStatuses.includes(d.status));
+  const activeTaken = taken.filter(d => !hiddenStatuses.includes(d.status));
+  const fGiven = filterCurrency === 'ALL' ? activeGiven : activeGiven.filter(d => (d.currency || 'UZS') === filterCurrency);
+  const fTaken = filterCurrency === 'ALL' ? activeTaken : activeTaken.filter(d => (d.currency || 'UZS') === filterCurrency);
   const activeList = activeTab === 'given' ? fGiven : fTaken;
 
   return (

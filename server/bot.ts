@@ -179,3 +179,24 @@ export async function notifyAdmins(text: string): Promise<void> {
     await sendTelegramMessage(adminId, text);
   }
 }
+
+/**
+ * Create in-app notification AND send Telegram message
+ */
+export async function createNotification(
+  userId: string,
+  telegramChatId: number | null,
+  title: string,
+  message: string
+): Promise<void> {
+  // Save to DB
+  try {
+    await supabase.from('notifications').insert({ user_id: userId, title, message });
+  } catch (err) {
+    console.error('Failed to save notification:', err);
+  }
+  // Send Telegram message
+  if (telegramChatId) {
+    await sendTelegramMessage(telegramChatId, `🔔 <b>${title}</b>\n${message}`);
+  }
+}

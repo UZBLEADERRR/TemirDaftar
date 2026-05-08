@@ -28,7 +28,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
     { name: t('home'), path: '/', icon: Home },
     { name: t('debts'), path: '/debts', icon: List },
     { name: t('scan'), path: '/scan', icon: ScanLine },
-    { name: t('notifications', 'Notifs'), path: '/notifications', icon: Bell, indicator: unreadCount > 0 },
+    { name: t('reminders', 'Eslatmalar'), path: '/notifications', icon: Bell, indicator: unreadCount > 0 },
     { name: t('profile'), path: '/profile', icon: UserIcon },
   ];
 

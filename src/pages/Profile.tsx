@@ -30,12 +30,16 @@ export const Profile = () => {
   const [activeTab, setActiveTab] = useState<'wallet' | 'score'>('wallet');
   const [scoreDetails, setScoreDetails] = useState({ given: 0, returned: 0, late: 0 });
   const [calculatedScore, setCalculatedScore] = useState(0);
+  const [cardType, setCardType] = useState('uzcard');
+  const [editName, setEditName] = useState('');
+  const [savingName, setSavingName] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     setCards(user.cards || []);
     setWalletBalance(user.wallet_balance || 0);
     setCalculatedScore(user.score || 0);
+    setEditName(user.name || '');
 
     // Fetch score details
     apiCall(`/api/users/${user.id}/trust`).then(trust => {
@@ -61,7 +65,8 @@ export const Profile = () => {
 
   const handleAddCard = async () => {
     if (!newCard || !user) return;
-    const updated = [...cards, newCard];
+    const cardLabel = `[${cardType.toUpperCase()}] ${newCard}`;
+    const updated = [...cards, cardLabel];
     try {
       await apiCall('/api/me/cards', { method: 'PATCH', body: JSON.stringify({ cards: updated }) });
       setCards(updated);
@@ -69,6 +74,18 @@ export const Profile = () => {
       hapticSuccess();
       toast.success(t('card_added', 'Karta qo\'shildi'));
     } catch { toast.error('Error'); }
+  };
+
+  const handleSaveName = async () => {
+    if (!editName.trim() || !user) return;
+    setSavingName(true);
+    try {
+      await apiCall('/api/me/name', { method: 'PATCH', body: JSON.stringify({ name: editName.trim() }) });
+      hapticSuccess();
+      toast.success('Ism saqlandi');
+      refreshUser();
+    } catch { toast.error('Xatolik'); }
+    finally { setSavingName(false); }
   };
 
   const handleRemoveCard = async (idx: number) => {
@@ -244,6 +261,18 @@ export const Profile = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto flex flex-col gap-8 pb-10">
+              {/* Name editing */}
+              <div className="flex flex-col gap-3">
+                <Label className="text-xs uppercase tracking-wider text-zinc-500 font-bold">Ism</Label>
+                <div className="flex gap-2">
+                  <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Ismingiz" className="flex-1" />
+                  <Button variant="outline" onClick={handleSaveName} disabled={savingName} className="shrink-0">
+                    {savingName ? '...' : 'Saqlash'}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Cards */}
               <div className="flex flex-col gap-3">
                 <Label className="text-xs uppercase tracking-wider text-zinc-500 font-bold">{t('cards')}</Label>
                 {cards.map((c, i) => (
@@ -253,7 +282,18 @@ export const Profile = () => {
                   </div>
                 ))}
                 <div className="flex flex-col gap-2 mt-1">
-                  <Input value={newCard} onChange={e => setNewCard(e.target.value)} placeholder="8600 1234 5678 9012" />
+                  <div className="flex gap-2">
+                    <select value={cardType} onChange={e => setCardType(e.target.value)}
+                      className="h-10 px-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 dark:text-zinc-100 text-sm font-bold outline-none w-28">
+                      <option value="uzcard">UzCard</option>
+                      <option value="humo">Humo</option>
+                      <option value="visa">Visa</option>
+                      <option value="mastercard">MasterCard</option>
+                      <option value="mir">Mir</option>
+                      <option value="other">Boshqa</option>
+                    </select>
+                    <Input value={newCard} onChange={e => setNewCard(e.target.value)} placeholder="8600 1234 5678 9012" className="flex-1" />
+                  </div>
                   <Button variant="outline" onClick={handleAddCard} className="w-full gap-2"><CreditCard size={16} />{t('add')}</Button>
                 </div>
               </div>

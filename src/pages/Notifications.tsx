@@ -27,7 +27,7 @@ export const Notifications = () => {
     <div className="p-6">
       <div className="flex items-center gap-3 mb-6 mt-4">
         <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-          <Bell size={24} /> {t('notifications', 'Bildirishnomalar')}
+          <Bell size={24} /> {t('reminders', 'Eslatmalar')}
         </h1>
       </div>
 
