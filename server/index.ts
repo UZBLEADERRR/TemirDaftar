@@ -4,12 +4,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
-import { initBot } from './bot.js';
+import { initBot, sendDebtReminder } from './bot.js';
 import { initCronJobs } from './cron.js';
 import adminRouter from './admin.js';
 import locationRouter from './location.js';
 import { supabase } from './supabase.js';
-import { telegramAuth, AuthenticatedRequest } from './auth.js';
+import { telegramAuth, requireShopkeeper, requireActiveSubscription, AuthenticatedRequest } from './auth.js';
 
 dotenv.config();
 
@@ -38,199 +38,362 @@ async function start() {
     } catch { res.status(500).json({ error: 'Server error' }); }
   });
 
-  // Get debts for current user
-  app.get('/api/debts', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+  // ==========================================
+  // SHOPKEEPER ROUTES — /api/shop/*
+  // ==========================================
+
+  // Get shop dashboard stats
+  app.get('/api/shop/stats', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
     try {
       const { data: user } = await supabase
         .from('users').select('id')
         .eq('telegram_id', req.telegramUser!.id).single();
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      const { data: given } = await supabase.from('debts')
-        .select('*, receiver:receiver_id(name, phone)')
-        .eq('giver_id', user.id).order('created_at', { ascending: false });
-      const { data: taken } = await supabase.from('debts')
-        .select('*, giver:giver_id(name, phone, cards)')
-        .eq('receiver_id', user.id).order('created_at', { ascending: false });
+      const today = new Date().toISOString().split('T')[0];
+      const monthStart = today.substring(0, 7) + '-01';
 
-      res.json({ given: given || [], taken: taken || [] });
-    } catch { res.status(500).json({ error: 'Server error' }); }
+      // Today's sales
+      const { data: todaySales } = await supabase
+        .from('sales')
+        .select('amount, sale_type, currency')
+        .eq('shop_owner_id', user.id)
+        .gte('created_at', today + 'T00:00:00')
+        .lte('created_at', today + 'T23:59:59');
+
+      const todayCash = (todaySales || [])
+        .filter(s => s.sale_type === 'cash')
+        .reduce((sum, s) => sum + s.amount, 0);
+      const todayDebt = (todaySales || [])
+        .filter(s => s.sale_type === 'debt')
+        .reduce((sum, s) => sum + s.amount, 0);
+
+      // Monthly sales
+      const { data: monthlySales } = await supabase
+        .from('sales')
+        .select('amount, sale_type, created_at')
+        .eq('shop_owner_id', user.id)
+        .gte('created_at', monthStart + 'T00:00:00');
+
+      const monthlyTotal = (monthlySales || []).reduce((sum, s) => sum + s.amount, 0);
+
+      // Overdue debts
+      const { data: overdueDebts } = await supabase
+        .from('debts')
+        .select('id, amount, currency')
+        .eq('shop_owner_id', user.id)
+        .eq('status', 'overdue');
+
+      const overdueCount = overdueDebts?.length || 0;
+      const overdueSum = (overdueDebts || []).reduce((sum, d) => sum + d.amount, 0);
+
+      // On-time customers (paid debts)
+      const { data: paidDebts } = await supabase
+        .from('debts')
+        .select('receiver_id')
+        .eq('shop_owner_id', user.id)
+        .eq('status', 'paid');
+
+      const onTimeCustomers = new Set((paidDebts || []).map(d => d.receiver_id).filter(Boolean)).size;
+
+      // Active debts total
+      const { data: activeDebts } = await supabase
+        .from('debts')
+        .select('id, amount')
+        .eq('shop_owner_id', user.id)
+        .in('status', ['active', 'pending', 'overdue']);
+
+      const activeDebtSum = (activeDebts || []).reduce((sum, d) => sum + d.amount, 0);
+      const activeDebtCount = activeDebts?.length || 0;
+
+      // Total customers
+      const { count: totalCustomers } = await supabase
+        .from('shop_customers')
+        .select('id', { count: 'exact', head: true })
+        .eq('shop_owner_id', user.id);
+
+      // Daily breakdown for monthly chart
+      const dailyBreakdown: Record<string, { cash: number; debt: number }> = {};
+      (monthlySales || []).forEach(s => {
+        const day = s.created_at.split('T')[0];
+        if (!dailyBreakdown[day]) dailyBreakdown[day] = { cash: 0, debt: 0 };
+        dailyBreakdown[day][s.sale_type as 'cash' | 'debt'] += s.amount;
+      });
+
+      res.json({
+        todayCash,
+        todayDebt,
+        todayTotal: todayCash + todayDebt,
+        monthlyTotal,
+        overdueCount,
+        overdueSum,
+        onTimeCustomers,
+        activeDebtSum,
+        activeDebtCount,
+        totalCustomers: totalCustomers || 0,
+        dailyBreakdown: Object.entries(dailyBreakdown).map(([date, data]) => ({
+          date,
+          cash: data.cash,
+          debt: data.debt,
+          total: data.cash + data.debt,
+        })).sort((a, b) => a.date.localeCompare(b.date)),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Server error' });
+    }
   });
 
-  // Create debt — returns qr_token for QR code
-  app.post('/api/debts', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+  // Get shopkeeper's customers
+  app.get('/api/shop/customers', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
     try {
       const { data: user } = await supabase
-        .from('users').select('id, wallet_balance, name')
+        .from('users').select('id')
         .eq('telegram_id', req.telegramUser!.id).single();
       if (!user) return res.status(404).json({ error: 'User not found' });
 
-      const { amount, currency, dueDate, receiverName, receiverPhone, note, type, receiverId } = req.body;
-      const { randomUUID } = await import('crypto');
-      const qrToken = randomUUID();
+      const { data: customers } = await supabase
+        .from('shop_customers')
+        .select('*, customer:customer_id(name, phone, telegram_chat_id)')
+        .eq('shop_owner_id', user.id)
+        .order('created_at', { ascending: false });
 
-      if (type === 'took') {
-        // First 3 times free
-        const { count } = await supabase
-          .from('debts')
-          .select('id', { count: 'exact', head: true })
-          .eq('creator_id', user.id)
-          .eq('giver_id', null);  // debts where user is receiver/creator
-        const takenCount = count || 0;
+      // Enrich with debt info
+      const enriched = await Promise.all((customers || []).map(async (c) => {
+        const customerId = c.customer_id;
+        let totalDebt = 0;
+        let overdueCount = 0;
+        let nearestDueDate: string | null = null;
 
-        if (takenCount >= 3) {
-          if ((user.wallet_balance || 0) < 1000)
-            return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas (3 ta bepul foydalanish tugadi)' });
-          await supabase.from('users').update({ wallet_balance: user.wallet_balance - 1000 }).eq('id', user.id);
-          await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'fee', amount: 1000, status: 'completed' });
+        if (customerId) {
+          const { data: debts } = await supabase
+            .from('debts')
+            .select('amount, status, due_date')
+            .eq('shop_owner_id', user.id)
+            .eq('receiver_id', customerId)
+            .in('status', ['active', 'pending', 'overdue']);
+
+          (debts || []).forEach(d => {
+            totalDebt += d.amount;
+            if (d.status === 'overdue') overdueCount++;
+            if (!nearestDueDate || d.due_date < nearestDueDate) nearestDueDate = d.due_date;
+          });
         }
-        // else: free (first 3 times)
+
+        return {
+          ...c,
+          totalDebt,
+          overdueCount,
+          nearestDueDate,
+          displayName: c.customer?.name || c.customer_name,
+          displayPhone: c.customer?.phone || c.customer_phone,
+        };
+      }));
+
+      res.json(enriched);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Server error' });
+    }
+  });
+
+  // Add new customer to shop
+  app.post('/api/shop/customers', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase
+        .from('users').select('id')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const { customerName, customerPhone } = req.body;
+      if (!customerName?.trim()) return res.status(400).json({ error: 'Mijoz ismi kerak' });
+
+      // Generate unique invite code
+      const { randomUUID } = await import('crypto');
+      const inviteCode = randomUUID().replace(/-/g, '').substring(0, 12);
+
+      const { data: customer, error } = await supabase
+        .from('shop_customers')
+        .insert({
+          shop_owner_id: user.id,
+          customer_name: customerName.trim(),
+          customer_phone: customerPhone || '',
+          invite_code: inviteCode,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.json(customer);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to add customer' });
+    }
+  });
+
+  // Get invite link for customer
+  app.get('/api/shop/customers/:id/invite', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: customer } = await supabase
+        .from('shop_customers')
+        .select('invite_code')
+        .eq('id', req.params.id)
+        .single();
+
+      if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+      const botUsername = process.env.BOT_USERNAME || 'qarz_daftari_bot';
+      const inviteLink = `https://t.me/${botUsername}?start=invite_${customer.invite_code}`;
+
+      res.json({ inviteLink, inviteCode: customer.invite_code });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update customer rating
+  app.patch('/api/shop/customers/:id', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { rating } = req.body;
+      const { data, error } = await supabase
+        .from('shop_customers')
+        .update({ rating })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get shopkeeper's debts
+  app.get('/api/shop/debts', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase
+        .from('users').select('id')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const { data: debts } = await supabase
+        .from('debts')
+        .select('*, receiver:receiver_id(name, phone)')
+        .eq('shop_owner_id', user.id)
+        .order('created_at', { ascending: false });
+
+      res.json(debts || []);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Server error' });
+    }
+  });
+
+  // Create new debt (shopkeeper) — no fees
+  app.post('/api/shop/debts', telegramAuth as any, requireActiveSubscription as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase
+        .from('users').select('id, name, shop_name')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const { amount, currency, dueDate, receiverName, receiverPhone, note, saleType, customerId } = req.body;
+
+      if (!amount || amount <= 0) return res.status(400).json({ error: 'Summani kiriting' });
+      if (!dueDate) return res.status(400).json({ error: 'Muddatni kiriting' });
+
+      // Find or link customer
+      let receiverId: string | null = null;
+      if (customerId) {
+        const { data: shopCustomer } = await supabase
+          .from('shop_customers')
+          .select('customer_id')
+          .eq('id', customerId)
+          .eq('shop_owner_id', user.id)
+          .single();
+
+        if (shopCustomer?.customer_id) {
+          receiverId = shopCustomer.customer_id;
+        }
       }
 
       const { data: debt, error } = await supabase.from('debts').insert({
-        amount, currency: currency || 'UZS', due_date: dueDate,
-        giver_id: type === 'took' ? null : user.id,
-        receiver_id: type === 'took' ? user.id : (receiverId || null),
-        receiver_name: type === 'took' ? '' : (receiverName || ''),
-        receiver_phone: type === 'took' ? '' : (receiverPhone || ''),
-        status: receiverId ? 'active' : 'pending',
-        note: note || '', creator_id: user.id,
-        qr_token: qrToken,
+        amount,
+        currency: currency || 'UZS',
+        due_date: dueDate,
+        giver_id: user.id,
+        receiver_id: receiverId,
+        receiver_name: receiverName || '',
+        receiver_phone: receiverPhone || '',
+        status: 'active',
+        note: note || '',
+        creator_id: user.id,
+        shop_owner_id: user.id,
+        sale_type: saleType || 'debt',
       }).select().single();
 
       if (error) throw error;
-      res.json({ ...debt, qr_token: qrToken });
+
+      // Record the sale
+      await supabase.from('sales').insert({
+        shop_owner_id: user.id,
+        customer_id: receiverId,
+        debt_id: debt.id,
+        amount,
+        currency: currency || 'UZS',
+        sale_type: saleType || 'debt',
+        product_note: note || '',
+      });
+
+      res.json(debt);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to create debt' });
     }
   });
 
-  // Scan QR — get debt info by token
-  app.get('/api/debts/scan/:token', telegramAuth as any, async (req, res) => {
+  // Record cash sale (no debt created)
+  app.post('/api/shop/sales', telegramAuth as any, requireActiveSubscription as any, async (req: AuthenticatedRequest, res) => {
     try {
-      const { data: debt } = await supabase
-        .from('debts')
-        .select('id, amount, currency, due_date, note, status, giver_id, receiver_id, receiver_name, giver:giver_id(id,name,score), receiver:receiver_id(id,name,score)')
-        .eq('qr_token', req.params.token).single();
-      if (!debt) return res.status(404).json({ error: 'QR kod topilmadi yoki allaqachon ishlatilgan' });
-      if (debt.status !== 'pending') return res.status(400).json({ error: 'Bu QR kod allaqachon ishlatilgan' });
-      res.json(debt);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  // Confirm debt via QR token (one-time)
-  app.post('/api/debts/scan/:token/confirm', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
-    try {
-      const { data: scanUser } = await supabase
-        .from('users').select('id, wallet_balance, name')
+      const { data: user } = await supabase
+        .from('users').select('id')
         .eq('telegram_id', req.telegramUser!.id).single();
-      if (!scanUser) return res.status(404).json({ error: 'User not found' });
+      if (!user) return res.status(404).json({ error: 'User not found' });
 
-      const { data: debt } = await supabase.from('debts').select('*').eq('qr_token', req.params.token).single();
-      if (!debt) return res.status(404).json({ error: 'QR kod topilmadi' });
-      if (debt.status !== 'pending') return res.status(400).json({ error: 'Bu QR kod allaqachon ishlatilgan' });
+      const { amount, currency, note } = req.body;
+      if (!amount || amount <= 0) return res.status(400).json({ error: 'Summani kiriting' });
 
-      let updateData: any = { status: 'active', qr_token: null, updated_at: new Date().toISOString() };
-      let notifyId: string | null = null;
+      const { data: sale, error } = await supabase.from('sales').insert({
+        shop_owner_id: user.id,
+        amount,
+        currency: currency || 'UZS',
+        sale_type: 'cash',
+        product_note: note || '',
+      }).select().single();
 
-      if (debt.giver_id && !debt.receiver_id) {
-        if ((scanUser.wallet_balance || 0) < 1000)
-          return res.status(400).json({ error: 'Hamyonda 1,000 UZS yetarli emas (xizmat to\'lovi)' });
-        await supabase.from('users').update({ wallet_balance: scanUser.wallet_balance - 1000 }).eq('id', scanUser.id);
-        await supabase.from('wallet_transactions').insert({ user_id: scanUser.id, type: 'fee', amount: 1000, status: 'completed' });
-        updateData.receiver_id = scanUser.id;
-        updateData.receiver_name = scanUser.name;
-        notifyId = debt.giver_id;
-      } else if (debt.receiver_id && !debt.giver_id) {
-        updateData.giver_id = scanUser.id;
-        notifyId = debt.receiver_id;
-      } else {
-        return res.status(400).json({ error: 'Noto\'g\'ri qarz holati' });
-      }
+      if (error) throw error;
+      res.json(sale);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to record sale' });
+    }
+  });
 
-      await supabase.from('debts').update(updateData).eq('id', debt.id);
+  // Send manual reminder (shopkeeper)
+  app.post('/api/shop/remind/:debtId', telegramAuth as any, requireActiveSubscription as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase
+        .from('users').select('id')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
 
-      if (notifyId) {
-        const { data: other } = await supabase.from('users').select('id, telegram_chat_id, name').eq('id', notifyId).single();
-        if (other) {
-          const { createNotification } = await import('./bot.js');
-          const isNewReceiver = !!updateData.receiver_id;
-          await createNotification(
-            other.id,
-            other.telegram_chat_id,
-            isNewReceiver ? '✅ Qarz tasdiqlandi' : '✅ Qarz qabul qilindi',
-            `${scanUser.name} tomonidan ${debt.amount.toLocaleString()} ${debt.currency} qarz tasdiqlandi`
-          );
-          // Also notify the scanner themselves
-          const { data: scannerRow } = await supabase.from('users').select('id, telegram_chat_id').eq('telegram_id', req.telegramUser!.id).single();
-          if (scannerRow) {
-            await createNotification(
-              scannerRow.id,
-              scannerRow.telegram_chat_id,
-              isNewReceiver ? '📥 Qarz olindi' : '📤 Qarz berildi',
-              `${debt.amount.toLocaleString()} ${debt.currency} qarz ro'yxatga qo'shildi`
-            );
-          }
-        }
+      const result = await sendDebtReminder(req.params.debtId, user.id);
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
       }
       res.json({ success: true });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to send reminder' });
+    }
   });
 
-  // Generate payment QR
-  app.post('/api/debts/:id/payment-qr', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
-    try {
-      const { data: user } = await supabase.from('users').select('id').eq('telegram_id', req.telegramUser!.id).single();
-      if (!user) return res.status(404).json({ error: 'User not found' });
-      const { data: debt } = await supabase.from('debts').select('*').eq('id', req.params.id).single();
-      if (!debt || debt.receiver_id !== user.id) return res.status(403).json({ error: 'Ruxsat yo\'q' });
-      const { randomUUID } = await import('crypto');
-      const paymentToken = randomUUID();
-      await supabase.from('debts').update({ payment_qr_token: paymentToken }).eq('id', debt.id);
-      res.json({ payment_token: paymentToken });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  // Confirm payment via payment QR token
-  app.post('/api/debts/payment/:token/confirm', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
-    try {
-      const { data: user } = await supabase.from('users').select('id, name').eq('telegram_id', req.telegramUser!.id).single();
-      if (!user) return res.status(404).json({ error: 'User not found' });
-      const { data: debt } = await supabase.from('debts')
-        .select('*, receiver:receiver_id(name, telegram_chat_id)')
-        .eq('payment_qr_token', req.params.token).single();
-      if (!debt) return res.status(404).json({ error: 'To\'lov QR topilmadi' });
-      if (debt.giver_id !== user.id) return res.status(403).json({ error: 'Faqat qarz bergan kishi tasdiqlashi mumkin' });
-      await supabase.from('debts').update({ status: 'paid', payment_qr_token: null, updated_at: new Date().toISOString() }).eq('id', debt.id);
-      // Notify receiver
-      if (debt.receiver_id) {
-        const { data: receiver } = await supabase.from('users').select('id, telegram_chat_id, name').eq('id', debt.receiver_id).single();
-        if (receiver) {
-          const { createNotification } = await import('./bot.js');
-          await createNotification(
-            receiver.id, receiver.telegram_chat_id,
-            '✅ To\'lovingiz tasdiqlandi!',
-            `${debt.amount.toLocaleString()} ${debt.currency} to'lovingiz qarz beruvchi tomonidan tasdiqlandi`
-          );
-        }
-      }
-      // Notify giver
-      const { data: giverRow } = await supabase.from('users').select('id, telegram_chat_id').eq('id', debt.giver_id).single();
-      if (giverRow) {
-        const { createNotification } = await import('./bot.js');
-        await createNotification(
-          giverRow.id, giverRow.telegram_chat_id,
-          '💰 To\'lov qabul qilindi',
-          `${debt.amount.toLocaleString()} ${debt.currency} to'lovi tasdiqlandi`
-        );
-      }
-      res.json({ success: true });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  // Update debt status
-
-  app.patch('/api/debts/:id', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+  // Update debt status (shopkeeper)
+  app.patch('/api/shop/debts/:id', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
     try {
       const { data: user } = await supabase
         .from('users').select('id')
@@ -239,7 +402,10 @@ async function start() {
 
       const updates = { ...req.body, updated_at: new Date().toISOString() };
       const { data, error } = await supabase.from('debts')
-        .update(updates).eq('id', req.params.id).select().single();
+        .update(updates)
+        .eq('id', req.params.id)
+        .eq('shop_owner_id', user.id)
+        .select().single();
 
       if (error) throw error;
       res.json(data);
@@ -248,35 +414,69 @@ async function start() {
     }
   });
 
-  // Delete debt
-  app.delete('/api/debts/:id', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+  // Delete debt (shopkeeper)
+  app.delete('/api/shop/debts/:id', telegramAuth as any, requireShopkeeper as any, async (req: AuthenticatedRequest, res) => {
     try {
-      await supabase.from('debts').delete().eq('id', req.params.id);
+      const { data: user } = await supabase
+        .from('users').select('id')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      await supabase.from('debts').delete()
+        .eq('id', req.params.id)
+        .eq('shop_owner_id', user.id);
       res.json({ success: true });
     } catch { res.status(500).json({ error: 'Failed to delete' }); }
   });
 
-  // Get user by ID (for scanning)
-  app.get('/api/users/:id', telegramAuth as any, async (req, res) => {
-    const { data } = await supabase.from('users')
-      .select('id, name, score, telegram_id').eq('id', req.params.id).single();
-    if (!data) return res.status(404).json({ error: 'User not found' });
-    res.json(data);
+  // ==========================================
+  // CUSTOMER ROUTES — /api/customer/*
+  // ==========================================
+
+  // Get customer's debts
+  app.get('/api/customer/debts', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase
+        .from('users').select('id, user_role')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const { data: debts } = await supabase
+        .from('debts')
+        .select('id, amount, currency, due_date, note, status, created_at, giver:giver_id(name, shop_name)')
+        .eq('receiver_id', user.id)
+        .order('created_at', { ascending: false });
+
+      res.json(debts || []);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Server error' });
+    }
   });
 
-  // Get trust score details for a user
-  app.get('/api/users/:id/trust', telegramAuth as any, async (req, res) => {
-    const userId = req.params.id;
-    const { data: asReceiver } = await supabase.from('debts').select('status, due_date, amount, created_at').eq('receiver_id', userId);
-    const { data: asGiver } = await supabase.from('debts').select('status').eq('giver_id', userId);
+  // Get customer's payment history (paid debts)
+  app.get('/api/customer/history', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { data: user } = await supabase
+        .from('users').select('id')
+        .eq('telegram_id', req.telegramUser!.id).single();
+      if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const total = asReceiver?.length || 0;
-    const paid = asReceiver?.filter(d => d.status === 'paid').length || 0;
-    const overdue = asReceiver?.filter(d => d.status === 'overdue').length || 0;
-    const given = asGiver?.length || 0;
+      const { data: history } = await supabase
+        .from('debts')
+        .select('id, amount, currency, due_date, note, status, created_at, updated_at, giver:giver_id(name, shop_name)')
+        .eq('receiver_id', user.id)
+        .eq('status', 'paid')
+        .order('updated_at', { ascending: false });
 
-    res.json({ totalDebts: total, paidOnTime: paid, overdue, givenToOthers: given, history: asReceiver || [] });
+      res.json(history || []);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Server error' });
+    }
   });
+
+  // ==========================================
+  // SHARED ROUTES
+  // ==========================================
 
   // Notifications
   app.get('/api/notifications', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
@@ -291,46 +491,6 @@ async function start() {
     if (!user) return res.json({ success: true });
     await supabase.from('notifications').update({ read: true }).eq('user_id', user.id).eq('read', false);
     res.json({ success: true });
-  });
-
-  // Wallet: topup request
-  app.post('/api/wallet/topup', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
-    const { data: user } = await supabase.from('users').select('id').eq('telegram_id', req.telegramUser!.id).single();
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const { amount, receiptUrl } = req.body;
-    if (!amount || amount < 10000) return res.status(400).json({ error: 'Min 10,000 UZS' });
-
-    await supabase.from('wallet_transactions').insert({
-      user_id: user.id, type: 'topup', amount, status: 'pending', receipt_url: receiptUrl || '',
-    });
-    // Notify admins
-    const { notifyAdmins } = await import('./bot.js');
-    await notifyAdmins(`💰 Yangi topup so'rov:\nMiqdor: ${amount.toLocaleString()} UZS`);
-    res.json({ success: true });
-  });
-
-  // Wallet: send money (P2P)
-  app.post('/api/wallet/send', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
-    const { data: sender } = await supabase.from('users').select('id, wallet_balance').eq('telegram_id', req.telegramUser!.id).single();
-    if (!sender) return res.status(404).json({ error: 'User not found' });
-    const { targetUserId, amount } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
-    if ((sender.wallet_balance || 0) < amount) return res.status(400).json({ error: 'Mablag\' yetarli emas' });
-
-    const { data: target } = await supabase.from('users').select('id, wallet_balance, telegram_chat_id').eq('id', targetUserId).single();
-    if (!target) return res.status(404).json({ error: 'Target user not found' });
-
-    await supabase.from('users').update({ wallet_balance: (sender.wallet_balance || 0) - amount }).eq('id', sender.id);
-    await supabase.from('users').update({ wallet_balance: (target.wallet_balance || 0) + amount }).eq('id', target.id);
-    await supabase.from('wallet_transactions').insert({
-      user_id: sender.id, target_user_id: target.id, type: 'p2p', amount, status: 'completed',
-    });
-
-    if (target.telegram_chat_id) {
-      const { sendTelegramMessage } = await import('./bot.js');
-      await sendTelegramMessage(target.telegram_chat_id, `💸 Sizga ${amount.toLocaleString()} UZS yuborildi!`);
-    }
-    res.json({ success: true, newBalance: (sender.wallet_balance || 0) - amount });
   });
 
   // Update user cards
@@ -350,6 +510,30 @@ async function start() {
     if (!name?.trim()) return res.status(400).json({ error: 'Ism bo\'sh bo\'lmasligi kerak' });
     await supabase.from('users').update({ name: name.trim() }).eq('id', user.id);
     res.json({ success: true });
+  });
+
+  // Update shop name
+  app.patch('/api/me/shop-name', telegramAuth as any, async (req: AuthenticatedRequest, res) => {
+    const { data: user } = await supabase.from('users').select('id').eq('telegram_id', req.telegramUser!.id).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { shopName } = req.body;
+    if (!shopName?.trim()) return res.status(400).json({ error: 'Do\'kon nomi bo\'sh bo\'lmasligi kerak' });
+    await supabase.from('users').update({ shop_name: shopName.trim() }).eq('id', user.id);
+    res.json({ success: true });
+  });
+
+  // Get user trust score
+  app.get('/api/users/:id/trust', telegramAuth as any, async (req, res) => {
+    const userId = req.params.id;
+    const { data: asReceiver } = await supabase.from('debts').select('status, due_date, amount, created_at').eq('receiver_id', userId);
+    const { data: asGiver } = await supabase.from('debts').select('status').eq('giver_id', userId);
+
+    const total = asReceiver?.length || 0;
+    const paid = asReceiver?.filter(d => d.status === 'paid').length || 0;
+    const overdue = asReceiver?.filter(d => d.status === 'overdue').length || 0;
+    const given = asGiver?.length || 0;
+
+    res.json({ totalDebts: total, paidOnTime: paid, overdue, givenToOthers: given, history: asReceiver || [] });
   });
 
   // ===== Static / Vite =====

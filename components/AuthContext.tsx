@@ -1,18 +1,21 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { getTelegramUser, initTelegramApp, apiCall, isTelegramWebApp } from '@/src/lib/telegram';
-import { trackLocation } from '@/src/lib/geolocation';
 
 interface User {
   id: string;
   telegram_id: number;
   name: string;
   phone: string;
-  wallet_balance: number;
   score: number;
   cards: string[];
   is_admin: boolean;
   is_registered: boolean;
-  last_location: any;
+  user_role: 'shopkeeper' | 'customer';
+  shop_name: string;
+  shop_owner_id: string | null;
+  subscription_status: 'trial' | 'active' | 'expired';
+  trial_started_at: string;
+  subscription_expires_at: string | null;
 }
 
 interface AuthContextType {
@@ -45,12 +48,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     const tgUser = getTelegramUser();
     if (tgUser || import.meta.env.DEV) {
-      fetchUser().then((u) => {
-        // Track location on each app launch
-        if (u) {
-          trackLocation().catch(() => {});
-        }
-      });
+      fetchUser();
     } else {
       setLoading(false);
     }

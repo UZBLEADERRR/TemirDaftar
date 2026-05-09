@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { supabase } from './supabase.js';
 import { AuthenticatedRequest, requireAdmin, telegramAuth } from './auth.js';
-import { notifyAdmins, sendTelegramMessage } from './bot.js';
-import { getDistance } from 'geolib';
+import { sendTelegramMessage } from './bot.js';
 
 const router = Router();
 router.use(telegramAuth as any);
@@ -12,27 +11,30 @@ router.use(requireAdmin as any);
 router.get('/stats', async (_req, res) => {
   try {
     const { count: usersCount } = await supabase.from('users').select('*', { count: 'exact', head: true });
-    const { count: activeDebts } = await supabase.from('debts').select('*', { count: 'exact', head: true }).in('status', ['active', 'overdue', 'pending', 'verifying']);
+    const { count: shopkeeperCount } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('user_role', 'shopkeeper');
+    const { count: customerCount } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('user_role', 'customer');
+    const { count: activeDebts } = await supabase.from('debts').select('*', { count: 'exact', head: true }).in('status', ['active', 'overdue', 'pending']);
     const { count: paidDebts } = await supabase.from('debts').select('*', { count: 'exact', head: true }).eq('status', 'paid');
 
-    // Revenue from fees
-    const { data: fees } = await supabase.from('wallet_transactions').select('amount').eq('type', 'fee').eq('status', 'completed');
-    const totalFeeRevenue = fees?.reduce((s, f) => s + f.amount, 0) || 0;
+    // Subscription stats
+    const { count: trialUsers } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('user_role', 'shopkeeper').eq('subscription_status', 'trial');
+    const { count: activeSubscriptions } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('user_role', 'shopkeeper').eq('subscription_status', 'active');
+    const { count: expiredSubscriptions } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('user_role', 'shopkeeper').eq('subscription_status', 'expired');
 
-    // Total topups
-    const { data: topups } = await supabase.from('wallet_transactions').select('amount').eq('type', 'topup').eq('status', 'approved');
-    const totalTopups = topups?.reduce((s, t) => s + t.amount, 0) || 0;
-
-    // Pending topups
-    const { count: pendingTopups } = await supabase.from('wallet_transactions').select('*', { count: 'exact', head: true }).eq('type', 'topup').eq('status', 'pending');
+    // Subscription revenue
+    const { data: paidSubs } = await supabase.from('subscriptions').select('amount').eq('status', 'paid');
+    const totalRevenue = paidSubs?.reduce((s, p) => s + p.amount, 0) || 0;
 
     res.json({
       users: usersCount || 0,
+      shopkeepers: shopkeeperCount || 0,
+      customers: customerCount || 0,
       activeDebts: activeDebts || 0,
       paidDebts: paidDebts || 0,
-      totalFeeRevenue,
-      totalTopups,
-      pendingTopups: pendingTopups || 0,
+      trialUsers: trialUsers || 0,
+      activeSubscriptions: activeSubscriptions || 0,
+      expiredSubscriptions: expiredSubscriptions || 0,
+      totalRevenue,
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch stats' });
@@ -45,84 +47,53 @@ router.get('/users', async (_req, res) => {
   res.json(data || []);
 });
 
-// Single user + locations
+// Single user details
 router.get('/users/:id', async (req, res) => {
   const { data: user } = await supabase.from('users').select('*').eq('id', req.params.id).single();
   if (!user) return res.status(404).json({ error: 'User not found' });
-  const { data: locations } = await supabase.from('locations').select('*').eq('user_id', req.params.id).order('created_at', { ascending: false }).limit(50);
-  const { data: debtsAsReceiver } = await supabase.from('debts').select('*').eq('receiver_id', req.params.id).order('created_at', { ascending: false });
   const { data: debtsAsGiver } = await supabase.from('debts').select('*').eq('giver_id', req.params.id).order('created_at', { ascending: false });
-  res.json({ user, locations: locations || [], debtsAsReceiver: debtsAsReceiver || [], debtsAsGiver: debtsAsGiver || [] });
+  const { data: debtsAsReceiver } = await supabase.from('debts').select('*').eq('receiver_id', req.params.id).order('created_at', { ascending: false });
+  const { data: customers } = await supabase.from('shop_customers').select('*').eq('shop_owner_id', req.params.id);
+  res.json({ user, debtsAsGiver: debtsAsGiver || [], debtsAsReceiver: debtsAsReceiver || [], customers: customers || [] });
 });
 
-// Approve topup
-router.post('/topup/approve/:txId', async (req, res) => {
-  const { data: tx } = await supabase.from('wallet_transactions').select('*').eq('id', req.params.txId).single();
-  if (!tx || tx.status !== 'pending') return res.status(400).json({ error: 'Invalid transaction' });
+// Manage subscription — activate
+router.post('/subscription/activate/:userId', async (req, res) => {
+  const { months, amount } = req.body;
+  const { data: user } = await supabase.from('users').select('*').eq('id', req.params.userId).single();
+  if (!user) return res.status(404).json({ error: 'User not found' });
 
-  await supabase.from('wallet_transactions').update({ status: 'approved' }).eq('id', tx.id);
-  const { data: user } = await supabase.from('users').select('wallet_balance, telegram_chat_id').eq('id', tx.user_id).single();
-  if (user) {
-    await supabase.from('users').update({ wallet_balance: (user.wallet_balance || 0) + tx.amount }).eq('id', tx.user_id);
-    if (user.telegram_chat_id) {
-      await sendTelegramMessage(user.telegram_chat_id, `✅ Hamyoningizga ${tx.amount.toLocaleString()} UZS qo'shildi!`);
-    }
+  const expiresAt = new Date();
+  expiresAt.setMonth(expiresAt.getMonth() + (months || 1));
+
+  await supabase.from('users').update({
+    subscription_status: 'active',
+    subscription_expires_at: expiresAt.toISOString(),
+  }).eq('id', user.id);
+
+  await supabase.from('subscriptions').insert({
+    user_id: user.id,
+    amount: amount || 35000,
+    period_months: months || 1,
+    status: 'paid',
+    paid_at: new Date().toISOString(),
+    expires_at: expiresAt.toISOString(),
+  });
+
+  if (user.telegram_chat_id) {
+    await sendTelegramMessage(user.telegram_chat_id,
+      `✅ Obunangiz faollashtirildi!\n\n` +
+      `📅 Amal qilish muddati: ${expiresAt.toISOString().split('T')[0]}\n` +
+      `💰 To'lov: ${(amount || 35000).toLocaleString()} UZS`
+    );
   }
   res.json({ success: true });
 });
 
-// Reject topup
-router.post('/topup/reject/:txId', async (req, res) => {
-  await supabase.from('wallet_transactions').update({ status: 'rejected' }).eq('id', req.params.txId);
+// Manage subscription — deactivate/expire
+router.post('/subscription/expire/:userId', async (req, res) => {
+  await supabase.from('users').update({ subscription_status: 'expired' }).eq('id', req.params.userId);
   res.json({ success: true });
-});
-
-// Pending topups
-router.get('/topups/pending', async (_req, res) => {
-  const { data } = await supabase.from('wallet_transactions').select('*, user:user_id (name, phone, telegram_id)').eq('type', 'topup').eq('status', 'pending').order('created_at', { ascending: false });
-  res.json(data || []);
-});
-
-// Deduct money from user
-router.post('/deduct/:userId', async (req, res) => {
-  const { amount, reason } = req.body;
-  if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
-
-  const { data: user } = await supabase.from('users').select('wallet_balance, telegram_chat_id, name').eq('id', req.params.userId).single();
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  const newBalance = Math.max(0, (user.wallet_balance || 0) - amount);
-  await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', req.params.userId);
-
-  await supabase.from('wallet_transactions').insert({
-    user_id: req.params.userId, type: 'deduct', amount, status: 'completed',
-  });
-
-  if (user.telegram_chat_id) {
-    await sendTelegramMessage(user.telegram_chat_id, `⚠️ Hamyoningizdan ${amount.toLocaleString()} UZS yechildi.\nSabab: ${reason || 'Admin tomonidan'}`);
-  }
-  res.json({ success: true, newBalance });
-});
-
-// Add money to user
-router.post('/add-money/:userId', async (req, res) => {
-  const { amount, reason } = req.body;
-  if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
-
-  const { data: user } = await supabase.from('users').select('wallet_balance, telegram_chat_id, name').eq('id', req.params.userId).single();
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  const newBalance = (user.wallet_balance || 0) + amount;
-  await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', req.params.userId);
-
-  await supabase.from('wallet_transactions').insert({
-    user_id: req.params.userId, type: 'topup', amount, status: 'approved',
-  });
-
-  if (user.telegram_chat_id) {
-    await sendTelegramMessage(user.telegram_chat_id, `✅ Hamyoningizga ${amount.toLocaleString()} UZS qo'shildi!\nSabab: ${reason || 'Admin tomonidan'}`);
-  }
-  res.json({ success: true, newBalance });
 });
 
 // Account recovery
@@ -140,29 +111,6 @@ router.post('/recover-account', async (req, res) => {
   }).eq('id', oldUser.id);
 
   res.json({ success: true, message: `Account ${oldUser.name} transferred to new Telegram ID` });
-});
-
-// Distance between two users
-router.get('/distance', async (req, res) => {
-  const { user1, user2 } = req.query;
-  if (!user1 || !user2) return res.status(400).json({ error: 'Two user IDs required' });
-
-  const { data: loc1 } = await supabase.from('locations').select('lat, lng, address').eq('user_id', user1 as string).order('created_at', { ascending: false }).limit(1).single();
-  const { data: loc2 } = await supabase.from('locations').select('lat, lng, address').eq('user_id', user2 as string).order('created_at', { ascending: false }).limit(1).single();
-
-  if (!loc1 || !loc2) return res.status(404).json({ error: 'Location data not found for one or both users' });
-
-  const distanceMeters = getDistance(
-    { latitude: loc1.lat, longitude: loc1.lng },
-    { latitude: loc2.lat, longitude: loc2.lng }
-  );
-
-  res.json({
-    distance_km: (distanceMeters / 1000).toFixed(2),
-    distance_m: distanceMeters,
-    user1_location: loc1,
-    user2_location: loc2,
-  });
 });
 
 export default router;

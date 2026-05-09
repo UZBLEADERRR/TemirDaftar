@@ -1,63 +1,92 @@
-# Qarz Daftari
+# Temir Daftar
 
-Telegram Mini App — Raqamli qarz kelishuvi platformasi.
+Do'konchilar uchun qarz boshqaruv tizimi — Telegram Mini App
 
-## Tech Stack
-- **Frontend**: React 19 + Vite + TailwindCSS 4
-- **Backend**: Node.js + Express + Telegram Bot API
-- **Database**: Supabase (PostgreSQL)
-- **Deploy**: Railway
+## Biznes Model
 
-## Setup
+| Kim | Nima qiladi | To'lovmi |
+|-----|------------|---------|
+| **Do'konchi** | Mijozlar qarzini boshqaradi, statistika ko'radi, eslatma yuboradi | Ha — oyiga 35,000 UZS |
+| **Mijoz** | O'z qarzini ko'radi, to'lov tarixini tekshiradi | YO'Q — bepul |
 
-### 1. Supabase
-1. [supabase.com](https://supabase.com) da yangi loyiha yarating
-2. SQL Editor da `supabase/migrations/001_init.sql` ni run qiling
-3. Project Settings → API dan URL va Service Role Key olding
+## Funksiyalar
 
-### 2. Telegram Bot
-1. [@BotFather](https://t.me/BotFather) da yangi bot yarating
-2. Bot token ni oling
-3. Bot Settings → Menu Button → Web App URL ni kiriting (deploy qilgandan keyin)
+### Do'konchi paneli
+- 📊 Dashboard — bugungi naqd/qarz, oylik grafik, kechiktirilganlar
+- 👥 Mijozlar — ro'yxat, reyting (yashil/sariq/qizil), invite link
+- ➕ Qarz/naqd qo'shish — summa, valyuta, muddat
+- 📈 Hisobotlar — kunlik/oylik statistika
+- 🔔 Eslatma — qo'lda va avtomatik Telegram eslatma
+- 👤 Profil — do'kon nomi, kartalar, obuna holati
 
-### 3. Environment Variables
-`.env` faylni yarating:
-```
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_SERVICE_KEY=eyJhbGci...
-TELEGRAM_BOT_TOKEN=7xxx:AAHxxx
-ADMIN_TELEGRAM_IDS=123456789
-APP_URL=https://your-app.railway.app
-PORT=3000
-NODE_ENV=development
-```
+### Mijoz paneli
+- 🏠 Qarzlarim — joriy qarzlar, qolgan kunlar
+- 📋 Tarix — to'langan qarzlar
+- 🔔 Eslatmalar — kelgan bildirishnomalar
+- 👤 Profil — ism, kartalar
 
-### 4. Admin qilish
-Supabase SQL Editor da:
-```sql
-UPDATE users SET is_admin = true WHERE telegram_id = YOUR_TELEGRAM_ID;
-```
-
-### 5. Local Development
-```bash
-npm install
-npm run dev
-```
-
-### 6. Railway Deploy
-1. GitHub ga push qiling
-2. Railway da yangi loyiha yarating
-3. Environment variablellarni qo'shing
-4. Deploy!
-
-## Features
-- 📱 Telegram Mini App
-- 🤖 Telegram Bot (registratsiya, eslatmalar)
-- 💰 Hamyon (topup, send)
-- 📊 Admin Panel (statistika, foydalanuvchilar, to'lovlar)
-- 📍 Geolokatsiya tracking
-- 📏 Masofa kalkulyatori
-- ⏰ Qarz eslatmalari (har 5 soatda)
+### Admin panel
+- 📊 Dashboard — foydalanuvchilar, obunalar, qarzlar
+- 👥 Foydalanuvchilar — batafsil ko'rish
+- 👑 Obuna boshqaruvi — faollashtirish/bekor qilish
 - 🔄 Akkaunt tiklash
-- ⭐ Ishonch reytingi
-- 🌐 Ko'p tilli (UZ/RU/EN)
+
+## Texnologiyalar
+
+- **Frontend:** React 19, Vite, TailwindCSS 4, Recharts
+- **Backend:** Node.js, Express, TypeScript
+- **Database:** Supabase (PostgreSQL)
+- **Bot:** node-telegram-bot-api
+- **Deploy:** Railway
+
+## Ishga tushirish
+
+```bash
+# Dependencies
+npm install
+
+# .env faylni yarating
+cp .env.example .env
+# TELEGRAM_BOT_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY, ADMIN_TELEGRAM_IDS ni to'ldiring
+
+# Development
+npm run dev
+
+# Production build
+npm run build
+npm start
+```
+
+## Environment Variables
+
+```
+TELEGRAM_BOT_TOKEN=      # Telegram bot token (@BotFather)
+SUPABASE_URL=            # Supabase project URL
+SUPABASE_SERVICE_KEY=    # Supabase service role key
+ADMIN_TELEGRAM_IDS=      # Vergul bilan admin TG IDlari
+APP_URL=                 # Production URL (https://...)
+BOT_USERNAME=            # Bot username (@ siz)
+PORT=3000
+```
+
+## Database Migratsiya
+
+Supabase SQL editor da ketma-ket ishga tushiring:
+1. `supabase/migrations/001_init.sql`
+2. `supabase/migrations/003_temir_daftar.sql`
+
+## Obuna Tizimi
+
+```
+Yangi do'konchi → 7 kun bepul trial
+Trial tugadi → Obunani faollashtiring ekrani
+Obunasiz: faqat qarzlarni ko'rish mumkin
+Obunali: qarz qo'shish, eslatma, statistika
+```
+
+## Deploy (Railway)
+
+1. GitHub repo ni ulang
+2. Environment variables ni qo'shing
+3. Build: `npm run build`
+4. Start: `npm start`
